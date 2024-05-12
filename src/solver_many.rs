@@ -84,6 +84,7 @@ impl Solver {
             self.dp.clear();
 
             for state in states.clone() {
+                // NOTE: gen_board() で盤面生成するので、初期盤面が空のケースは考えなくてよい。
                 let Some(board) = gen_board(state, counter, inc_timing) else {
                     continue;
                 };
@@ -130,11 +131,17 @@ impl Solver {
             let best_action = pos.actions().max_by_key(|action| {
                 let pos_child = pos.do_action(action);
                 let gain_action = score_erase(action.square_count());
-                let gain_child = match self.dp.probe(pos_child.key()) {
-                    DpTableProbe::Found(score) => score,
-                    DpTableProbe::Created(_) => {
-                        unreachable!("あるはずの DP エントリが見つからない!?");
-                    }
+                // 空の盤面は DP テーブルに載らないので例外処理が必要。
+                // それ以外の盤面は DP テーブルに載っているはず。
+                let gain_child = if pos_child.board().is_empty() {
+                    SCORE_PERFECT
+                } else {
+                    let DpTableProbe::Found(score) = self.dp.probe(pos_child.key()) else {
+                        eprintln!("この盤面の DP エントリが見つからない!?");
+                        eprint!("{}", pos_child.board());
+                        unreachable!();
+                    };
+                    score
                 };
                 gain_action + gain_child
             });
@@ -150,6 +157,12 @@ impl Solver {
 
     /// `pos` から追加で獲得できる最大スコアを返す。
     fn dfs(&mut self, pos: &Position) -> Score {
+        // 空の盤面に対する DP エントリが作られないよう、先にパーフェクト判定する。
+        // 他の終了局面については仮作成するエントリの gain_max が 0 なのでそのままでよい。
+        if pos.board().is_empty() {
+            return SCORE_PERFECT;
+        }
+
         let key = pos.key();
 
         match self.dp.probe(key) {
@@ -163,14 +176,11 @@ impl Solver {
                     chmax!(gain_max, gain_action + gain_child);
                 }
 
-                // 終了局面ならばパーフェクト判定して値を返す。
+                // 終了局面ならば単に 0 を返す。
+                // DP テーブルに仮作成したエントリの gain_max は 0 なのでそのままでよい。
                 // 終了局面であることと gain_max が 0 であることは同値。
                 if gain_max == 0 {
-                    return if pos.board().is_empty() {
-                        SCORE_PERFECT
-                    } else {
-                        0
-                    };
+                    return 0;
                 }
 
                 self.dp.set_gain_max(dp_idx, gain_max);
@@ -343,6 +353,16 @@ impl DpTable {
     /// エントリがまだ存在しない場合、仮の値でエントリを作成し、そのインデックスを返す。
     fn probe(&mut self, key: u64) -> DpTableProbe {
         // linear probe
+
+        // key に対応する局面が終了局面の場合、盤面が空でないなら仮作成したエントリはそのままにできる。
+        // (gain_max を 0 として仮作成するので)
+        // しかし、盤面が空の場合は仮作成してしまうとエントリの値が正しくなくなる。
+        //
+        // これを安直に解決するならハッシュ値 0 に対して SCORE_PERFECT を返すようにすればよいが、
+        // 偶然ハッシュ値が 0 の空でない盤面が生じてしまうとほぼ確実に解がおかしくなる。
+        //
+        // というわけで、一応 Solver 側で空の盤面に対する例外処理を行い、
+        // 空の盤面は DP テーブルに載らないようにしておく。
 
         let mut idx = key as usize & Self::INDEX_MASK;
         loop {
