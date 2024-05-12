@@ -8,6 +8,11 @@ use crate::util::chmax;
 
 /// 与えられた盤面に対する最大スコアとその手順を返す。
 pub fn solve_problem(board: Board) -> (Score, ActionHistory) {
+    // 初期盤面が空の場合について考えたくないので、先に処理してしまう。
+    if board.is_empty() {
+        return (SCORE_PERFECT, ActionHistory::new());
+    }
+
     let pos = Position::new(board);
 
     Solver::new().solve(&pos)
@@ -36,11 +41,17 @@ impl Solver {
             let best_action = pos.actions().max_by_key(|action| {
                 let pos_child = pos.do_action(action);
                 let gain_action = score_erase(action.square_count());
-                let gain_child = match self.dp.probe(pos_child.key()) {
-                    HashTableProbe::Found(score) => score,
-                    HashTableProbe::Created(_) => {
-                        unreachable!("あるはずの DP エントリが見つからない!?")
-                    }
+                // 空の盤面は DP テーブルに載らないので例外処理が必要。
+                // それ以外の盤面は DP テーブルに載っているはず。
+                let gain_child = if pos_child.board().is_empty() {
+                    SCORE_PERFECT
+                } else {
+                    let HashTableProbe::Found(score) = self.dp.probe(pos_child.key()) else {
+                        eprintln!("この盤面の DP エントリが見つからない!?");
+                        eprint!("{}", pos_child.board());
+                        unreachable!();
+                    };
+                    score
                 };
                 gain_action + gain_child
             });
@@ -56,6 +67,12 @@ impl Solver {
 
     /// `pos` から追加で獲得できる最大スコアを返す。
     fn dfs(&mut self, pos: &Position) -> Score {
+        // 空の盤面に対する DP エントリが作られないよう、先にパーフェクト判定する。
+        // 他の終了局面については仮作成するエントリの gain_max が 0 なのでそのままでよい。
+        if pos.board().is_empty() {
+            return SCORE_PERFECT;
+        }
+
         let key = pos.key();
 
         match self.dp.probe(key) {
@@ -69,14 +86,11 @@ impl Solver {
                     chmax!(gain_max, gain_action + gain_child);
                 }
 
-                // 終了局面ならばパーフェクト判定して値を返す。
+                // 終了局面ならば単に 0 を返す。
+                // DP テーブルに仮作成したエントリの gain_max は 0 なのでそのままでよい。
                 // 終了局面であることと gain_max が 0 であることは同値。
                 if gain_max == 0 {
-                    return if pos.board().is_empty() {
-                        SCORE_PERFECT
-                    } else {
-                        0
-                    };
+                    return 0;
                 }
 
                 self.dp.set_gain_max(dp_idx, gain_max);
@@ -167,6 +181,16 @@ impl HashTable {
     fn probe(&mut self, key: u64) -> HashTableProbe {
         // linear probe
 
+        // key に対応する局面が終了局面の場合、盤面が空でないなら仮作成したエントリはそのままにできる。
+        // (gain_max を 0 として仮作成するので)
+        // しかし、盤面が空の場合は仮作成してしまうとエントリの値が正しくなくなる。
+        //
+        // これを安直に解決するならハッシュ値 0 に対して SCORE_PERFECT を返すようにすればよいが、
+        // 偶然ハッシュ値が 0 の空でない盤面が生じてしまうとほぼ確実に解がおかしくなる。
+        //
+        // というわけで、一応 Solver 側で空の盤面に対する例外処理を行い、
+        // 空の盤面は DP テーブルに載らないようにしておく。
+
         let mut idx = key as usize & Self::INDEX_MASK;
         loop {
             let entry = unsafe { self.array.get_unchecked_mut(idx) };
@@ -200,4 +224,63 @@ impl HashTable {
 enum HashTableProbe {
     Found(Score),
     Created(usize),
+}
+
+#[cfg(test)]
+mod tests {
+    use indoc::indoc;
+
+    use crate::square::*;
+
+    use super::*;
+
+    fn sq_new(col: Col, row: Row) -> Square {
+        Square::new(col, row)
+    }
+
+    fn parse_board(s: impl AsRef<str>) -> Board {
+        s.as_ref().parse().unwrap()
+    }
+
+    fn solution_new(sqs: impl IntoIterator<Item = Square>) -> ActionHistory {
+        sqs.into_iter().collect()
+    }
+
+    #[test]
+    #[ignore]
+    fn test_solve_problem() {
+        assert_eq!(
+            solve_problem(Board::empty()),
+            (SCORE_PERFECT, solution_new([]))
+        );
+
+        {
+            let board = parse_board(indoc! {"
+                12345123
+                51234512
+                45123451
+                34512345
+                23451234
+                12345123
+            "});
+            assert_eq!(solve_problem(board), (0, solution_new([])));
+        }
+        {
+            let board = parse_board(indoc! {"
+                ........
+                ........
+                ........
+                ........
+                ........
+                111.....
+            "});
+            assert_eq!(
+                solve_problem(board),
+                (
+                    score_erase(3) + SCORE_PERFECT,
+                    solution_new([sq_new(COL_1, ROW_1)])
+                )
+            );
+        }
+    }
 }
