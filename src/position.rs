@@ -3,6 +3,7 @@
 use crate::action::Action;
 use crate::board::Board;
 use crate::piece::{Piece, PieceArray};
+use crate::score::{score_erase, Score, SCORE_PERFECT};
 use crate::square::Square;
 use crate::zobrist::{Key, ZOBRIST_TABLE};
 
@@ -50,6 +51,12 @@ impl Position {
         self.piece_counts[piece]
     }
 
+    /// 合法手があるかどうかを返す。
+    pub fn has_action(&self) -> bool {
+        // TODO: より高速化できる
+        self.actions().next().is_some()
+    }
+
     /// 合法手を列挙する。
     pub fn actions(&self) -> impl std::iter::FusedIterator<Item = Action> + Clone + '_ {
         self.board
@@ -81,6 +88,33 @@ impl Position {
             key,
             piece_counts,
         }
+    }
+
+    /// この局面から追加で獲得しうるスコアの上界を返す。
+    /// 探索は一切行わず、粗く見積もる。
+    ///
+    /// この関数が 0 を返すならば、`self` はパーフェクトでない終了局面である。
+    /// ただし逆は成り立たない (例: `121.......`)。
+    pub fn score_upper_bound(&self) -> Score {
+        // 2 個以上存在する駒種全てが 1 手で全消しできると仮定して上界を求める。
+        // 適宜パーフェクトボーナスも加算する。
+
+        let mut res = 0;
+        let mut perfect = true;
+        for piece in Piece::all() {
+            let count = self.piece_count(piece);
+            match count {
+                0 => {}
+                1 => perfect = false,
+                _ => res += score_erase(u32::from(count)),
+            }
+        }
+
+        if perfect {
+            res += SCORE_PERFECT;
+        }
+
+        res
     }
 }
 
