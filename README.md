@@ -1,5 +1,7 @@
 # SFC『鮫亀』: さめがめ「かんたん」モードの最大スコアを探索するソルバー
 
+**こちらは古い版です。新しい版:** <https://github.com/taotao54321/SameGameSFCSmall2>
+
 ## 動作環境
 
 * BMI2 命令に対応した x64 CPU
